@@ -69,14 +69,8 @@ abstract class AbstractKQueueChannel extends AbstractChannel implements UnixChan
     private boolean writeFilterEnabled;
     boolean readReadyRunnablePending;
     boolean inputClosedSeenErrorOnRead;
-    /**
-     * This member variable means we don't have to have a map in {@link KQueueEventLoop} which associates the FDs
-     * from kqueue to instances of this class. This field will be initialized by JNI when modifying kqueue events.
-     * If there is no global reference when JNI gets a kqueue evSet call (aka this field is 0) then a global reference
-     * will be created and the address will be saved in this member variable. Then when we process a kevent in Java
-     * we can ask JNI to give us the {@link AbstractKQueueChannel} that corresponds to that event.
-     */
-    long jniSelfPtr;
+
+    private KQueueRegistration registration;
 
     protected volatile boolean active;
     private volatile SocketAddress local;
@@ -170,23 +164,8 @@ abstract class AbstractKQueueChannel extends AbstractChannel implements UnixChan
     }
 
     @Override
-    protected boolean isCompatible(EventLoop loop) {
-        return loop instanceof KQueueEventLoop;
-    }
-
-    @Override
     public boolean isOpen() {
         return socket.isOpen();
-    }
-
-    @Override
-    protected void doDeregister() throws Exception {
-        // Make sure we unregister our filters from kqueue!
-        readFilter(false);
-        writeFilter(false);
-        evSet0(Native.EVFILT_SOCK, Native.EV_DELETE, 0);
-
-        ((KQueueEventLoop) eventLoop()).remove(this);
     }
 
     @Override
@@ -207,20 +186,30 @@ abstract class AbstractKQueueChannel extends AbstractChannel implements UnixChan
         }
     }
 
-    @Override
-    protected void doRegister() throws Exception {
+    void register0(KQueueRegistration registration)  {
+        this.registration = registration;
         // Just in case the previous EventLoop was shutdown abruptly, or an event is still pending on the old EventLoop
         // make sure the readReadyRunnablePending variable is reset so we will be able to execute the Runnable on the
         // new EventLoop.
         readReadyRunnablePending = false;
         // Add the write event first so we get notified of connection refused on the client side!
         if (writeFilterEnabled) {
-            evSet0(Native.EVFILT_WRITE, Native.EV_ADD_CLEAR_ENABLE);
+            evSet0(registration, Native.EVFILT_WRITE, Native.EV_ADD_CLEAR_ENABLE);
         }
         if (readFilterEnabled) {
-            evSet0(Native.EVFILT_READ, Native.EV_ADD_CLEAR_ENABLE);
+            evSet0(registration, Native.EVFILT_READ, Native.EV_ADD_CLEAR_ENABLE);
         }
-        evSet0(Native.EVFILT_SOCK, Native.EV_ADD, Native.NOTE_RDHUP);
+        evSet0(registration, Native.EVFILT_SOCK, Native.EV_ADD, Native.NOTE_RDHUP);
+    }
+
+    void deregister0() throws IOException {
+        // Make sure we unregister our filters from kqueue!
+        readFilter(false);
+        writeFilter(false);
+        if (registration != null) {
+            evSet0(registration, Native.EVFILT_SOCK, Native.EV_DELETE, 0);
+            registration = null;
+        }
     }
 
     @Override
@@ -366,16 +355,16 @@ abstract class AbstractKQueueChannel extends AbstractChannel implements UnixChan
 
     private void evSet(short filter, short flags) {
         if (isOpen() && isRegistered()) {
-            evSet0(filter, flags);
+            evSet0(registration, filter, flags);
         }
     }
 
-    private void evSet0(short filter, short flags) {
-        evSet0(filter, flags, 0);
+    private void evSet0(KQueueRegistration registration, short filter, short flags) {
+        evSet0(registration, filter, flags, 0);
     }
 
-    private void evSet0(short filter, short flags, int fflags) {
-        ((KQueueEventLoop) eventLoop()).evSet(this, filter, flags, fflags);
+    private void evSet0(KQueueRegistration registration, short filter, short flags, int fflags) {
+        registration.evSet(filter, flags, fflags);
     }
 
     abstract class AbstractKQueueUnsafe extends AbstractUnsafe {

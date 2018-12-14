@@ -673,11 +673,6 @@ public class EmbeddedChannel extends AbstractChannel {
     }
 
     @Override
-    protected boolean isCompatible(EventLoop loop) {
-        return loop instanceof EmbeddedEventLoop;
-    }
-
-    @Override
     protected SocketAddress localAddress0() {
         return isActive()? LOCAL_ADDRESS : null;
     }
@@ -687,8 +682,7 @@ public class EmbeddedChannel extends AbstractChannel {
         return isActive()? REMOTE_ADDRESS : null;
     }
 
-    @Override
-    protected void doRegister() throws Exception {
+    void setActive() {
         state = State.ACTIVE;
     }
 
